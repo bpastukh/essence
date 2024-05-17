@@ -3,8 +3,11 @@
 namespace App\Console\Commands;
 
 use App\Models\Article;
+use App\Models\Source;
 use App\Service\GetSummaryService;
+use DateTimeImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Log\Logger;
 use Symfony\Component\DomCrawler\Crawler;
 
 class ScrapSymfonyBlogCommand extends Command
@@ -26,24 +29,37 @@ class ScrapSymfonyBlogCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(GetSummaryService $getSummaryService)
+    public function handle(GetSummaryService $getSummaryService, Logger $logger)
     {
-        $host = 'https://symfony.com';
-        $urlToParse = $host . '/blog/category/a-week-of-symfony';
+        $logger->info('Scraping Symfony Blog');
+        $source = Source::where('name', 'Symfony Blog')->first();
+        if ($source === null) {
+            $logger->error('Source not found');
+            return;
+        }
 
-        $content = file_get_contents($urlToParse);
-        $digestUrls = $this->extractDigests($content);
+        $this->updateLastParsedAt($source);
 
-        foreach ($digestUrls as $digestUrl) {
-            $digestFullUrl =  $host . $digestUrl;
-            $digest = file_get_contents($digestFullUrl);
+        $content = $this->fetchContent($source, $logger);
+        if (null === $content) {
+            return;
+        }
 
-            $articleLinks = $this->extractArticles($digest);
-            $summary = $getSummaryService->getSummary($articleLinks);
+        $digests = array_reverse($this->extractDigests($content));
+        $logger->info('Found ' . count($digests) . ' digests');
 
-            foreach ($summary as $article) {
-                Article::create($article);
+        foreach ($digests as $digest) {
+            $logger->info('Parsing digest', [$digest['link'], $digest['dateTime']]);
+            if ($this->checkShouldSkipDigest($source, $digest, $logger)) {
+                $logger->info('Skipping');
+                continue;
             }
+
+            $this->processDigest($source, $digest, $logger, $getSummaryService);
+            $this->updateSourceLastParsedInfo($source, $digest);
+
+            $logger->info('Parsed digest', [$digest['link']]);
+            break;
         }
     }
 
@@ -53,7 +69,12 @@ class ScrapSymfonyBlogCommand extends Command
         $links = [];
 
         $crawler->filter('.a-week-of-symfony')->each(function (Crawler $node) use (&$links) {
-            $links[] = $node->filter('h2 a')->attr('href');
+            $link = $node->filter('h2 a')->attr('href');
+            $dateTime = trim($node->filter('.post-metadata-item')->first()->text());
+            $links[] = [
+                'link' => $link,
+                'dateTime' => new DateTimeImmutable($dateTime),
+            ];
         });
 
         return $links;
@@ -75,5 +96,55 @@ class ScrapSymfonyBlogCommand extends Command
         }
 
         return $links;
+    }
+
+    private function updateLastParsedAt($source)
+    {
+        $source->last_parse_at = now();
+        $source->save();
+    }
+
+    private function fetchContent($source, Logger $logger): string
+    {
+        $content = file_get_contents($source->url_to_parse);
+        if ($content === false) {
+            $logger->error('Error while fetching content');
+
+            return null;
+        }
+
+        return $content;
+    }
+
+    // Skip digest if dateTime is before Source last_parsed_digest_time
+    private function checkShouldSkipDigest($source, $digest): bool
+    {
+        return $source->last_parsed_digest_time && $digest['dateTime'] <= $source->last_parsed_digest_time;
+    }
+
+    private function processDigest($source, $digest, Logger $logger, GetSummaryService $getSummaryService)
+    {
+        $digestFullUrl = $source->host . $digest['link'];
+        $digestContent = file_get_contents($digestFullUrl);
+
+        if ($digestContent === false) {
+            $logger->error('Error while fetching digest content');
+
+            return;
+        }
+
+        $articleLinks = $this->extractArticles($digestContent);
+        $summary = $getSummaryService->getSummary($articleLinks);
+
+        foreach ($summary as $article) {
+            Article::create($article);
+        }
+    }
+
+    private function updateSourceLastParsedInfo($source, $digest)
+    {
+        $source->last_parsed_digest_time = $digest['dateTime'];
+        $source->last_parsed_digest_url = $digest['link'];
+        $source->save();
     }
 }

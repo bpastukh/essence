@@ -17,4 +17,13 @@ class Article extends Model
     {
         return $this->created_at->format('Y-m-d');
     }
+
+    public function getTagsAttribute($value)
+    {
+        if ($value === null) {
+            return [];
+        }
+
+        return json_decode($value, true);
+    }
 }
