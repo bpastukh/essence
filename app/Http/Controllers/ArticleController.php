@@ -9,7 +9,7 @@ class ArticleController extends Controller
 {
     public function index()
     {
-        $articles = Article::all();
+        $articles = Article::orderBy('id')->cursorPaginate(10);
 
         return view('articles', ['articles' => $articles]);
     }
