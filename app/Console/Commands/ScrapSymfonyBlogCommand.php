@@ -137,6 +137,10 @@ class ScrapSymfonyBlogCommand extends Command
         $summary = $getSummaryService->getSummary($articleLinks);
 
         foreach ($summary as $article) {
+            if (empty($article['url'])) {
+                continue;
+            }
+
             Article::create($article);
         }
     }

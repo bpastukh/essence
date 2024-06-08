@@ -18,7 +18,7 @@ class ArticleController extends Controller
         $cacheKey = self::CACHE_KEY . $cursor;
 
         $articles = $cache->remember($cacheKey, self::CACHE_TTL_SECONDS, function () {
-            return Article::orderBy('id')->cursorPaginate(self::PAGINATION_SIZE);
+            return Article::orderBy('id', 'desc')->cursorPaginate(self::PAGINATION_SIZE);
         });
 
         return view('articles', ['articles' => $articles]);
